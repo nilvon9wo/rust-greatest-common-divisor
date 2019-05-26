@@ -4,6 +4,7 @@ extern crate mime;
 extern crate router;
 extern crate urlencoded;
 
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use iron::prelude::*;
@@ -36,56 +37,100 @@ fn get_form(_request: &mut Request) -> IronResult<Response> {
     response.set_mut(r#"
         <title>GCD Calculator</title>
         <form action="/gcd" method="post">
-            <input type="text" name="n"/>
-            <input type="text" name="n"/>
+            <input type="text" name="integer"/>
+            <input type="text" name="integer"/>
             <button type="submit">Compute GCD</button>
         </form>"#);
     Ok(response)
 }
 
 fn post_gcd(request: &mut Request) -> IronResult<Response> {
-    let mut response = Response::new();
-    let form_data = match request.get_ref::<UrlEncodedBody>() {
-        Err(e) => {
-            response.set_mut(status::BadRequest);
-            response.set_mut(format!("Error parsing form data: {:?}\n", e));
-            return Ok(response);
+    let form_data = parse_request(request);
+    let unparsed_values = extract_values(form_data);
+    let numbers = parse_for_numbers(unparsed_values);
+    match find_greatest_common_devisor(&numbers) {
+        Err(error) => { return Ok(error); }
+        Ok(divisor) => {
+            let mut response = Response::new();
+            response.set_mut(status::Ok);
+            response.set_mut(mime!(Text/Html; Charset=Utf8));
+            response.set_mut(
+                format!(
+                    "The greatest common divisor of the numbers {:?} is <b>{}</b>\n",
+                    numbers,
+                    divisor
+                )
+            );
+            response
         }
-        Ok(map) =>
-            map
-    };
-    let unparsed_numbers = match form_data.get("n") {
-        None => {
-            response.set_mut(status::BadRequest);
-            response.set_mut(format!("form data has no 'n' parameter\n"));
-            return Ok(response);
+    }
+}
+
+fn parse_request<'a>(request: &'a mut Request)
+                     -> Result<&'a HashMap<String, Vec<String>>, &'a mut Response> {
+    match request.get_ref::<UrlEncodedBody>() {
+        Err(error) => {
+            return Err(
+                create_bad_response(format!("Error parsing form data: {:?}\n", error))
+            );
         }
-        Some(nums) =>
-            nums
-    };
-    let mut numbers = Vec::new();
-    for unparsed in unparsed_numbers {
-        match u64::from_str(&unparsed) {
-            Err(_) => {
-                response.set_mut(status::BadRequest);
-                response.set_mut(
-                    format!("Value for 'n' parameter not a number: {:?}\n",
-                            unparsed));
-                return Ok(response);
+        Ok(form_data) => Ok(form_data)
+    }
+}
+
+fn extract_values<'a>(form_data: Result<&HashMap<String, Vec<String>>, &'a mut Response>)
+                      -> Result<&'a Vec<String>, &'a mut Response> {
+    match form_data {
+        Err(error) => { return Err(error); }
+        Ok(input_values) => {
+            match input_values.get("integer") {
+                None => {
+                    return Err(
+                        create_bad_response(format!(
+                            "form data has no 'integer' parameter\n"
+                        ))
+                    );
+                }
+                Some(values) => Ok(values)
             }
-            Ok(n) => { numbers.push(n); }
         }
     }
-    let mut d = numbers[0];
-    for m in &numbers[1..] {
-        d = greatest_common_divisor(d, *m);
+}
+
+fn parse_for_numbers<'a>(unparsed_values: Result<&Vec<String>, &'a mut Response>)
+                         -> Result<&'a Vec<String>, &'a mut Response> {
+    match unparsed_values {
+        Err(error) => { return Err(error); }
+        Ok(values) => {
+            let &mut integers = Vec::new();
+            for unparsed in values {
+                match u64::from_str(&unparsed) {
+                    Err(_) => {
+                        return Err(create_bad_response(format!(
+                            "Value for 'integer' parameter not a number: {:?}\n",
+                            unparsed
+                        )));
+                    }
+                    Ok(n) => { integers.push(n); }
+                }
+            }
+            Ok(integers)
+        }
     }
-    response.set_mut(status::Ok);
-    response.set_mut(mime!(Text/Html; Charset=Utf8));
-    response.set_mut(
-        format!("The greatest common divisor of the numbers {:?} is <b>{}</b>\n",
-                numbers, d));
-    Ok(response)
+}
+
+fn find_greatest_common_devisor<'a>(numbers: &Result<&Vec<String>, &mut Response>)
+                                    -> Result<&'a u64, &'a mut Response> {
+    match numbers {
+        Err(error) => { return Err(*error); }
+        Ok(integers) => {
+            let mut divisor = numbers[0];
+            for next_integer in &numbers[1..] {
+                divisor = greatest_common_divisor(divisor, *next_integer);
+            }
+            Ok(divisor)
+        }
+    }
 }
 
 fn greatest_common_divisor(mut integer1: u64, mut integer2: u64) -> u64 {
@@ -107,3 +152,8 @@ fn test_greatest_common_divisor() {
     assert_eq!(greatest_common_divisor(2 * 3 * 5 * 11 * 17, 3 * 7 * 11 * 13 * 19), 3 * 11);
 }
 
+fn create_bad_response<'a>(error_message: String) -> &'a mut Response {
+    Response::new()
+        .set_mut(status::BadRequest)
+        .set_mut(error_message)
+}
